@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -33,7 +33,7 @@ jobs:
             ./image
 
       - name: Upload OCI tarball
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: image-tar
           path: image.tar
@@ -48,10 +48,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Download OCI tarball
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: image-tar
 
@@ -79,10 +79,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Download OCI tarball
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: image-tar
 
@@ -90,9 +90,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y skopeo
 
       # Push directly from the already-built tarball — no rebuild.
+      # --multi-arch all is required: without it, skopeo defaults to
+      # copying only the architecture matching the runner (amd64),
+      # silently dropping the arm64 variant from the pushed manifest.
       - name: Push to GHCR
         run: |
           skopeo copy \
+            --multi-arch all \
             --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
             oci-archive:image.tar \
             docker://ghcr.io/clbsoldev/chrony-ntp-server:latest
@@ -104,13 +108,14 @@ jobs:
         if: vars.ENABLE_DOCKERHUB == 'true'
         run: |
           skopeo copy \
+            --multi-arch all \
             --dest-creds "${{ secrets.DOCKERHUB_USERNAME }}:${{ secrets.DOCKERHUB_TOKEN }}" \
             oci-archive:image.tar \
             docker://docker.io/${{ secrets.DOCKERHUB_USERNAME }}/chrony-ntp-server:latest
 
       - name: Sync README to Docker Hub
         if: vars.ENABLE_DOCKERHUB == 'true'
-        uses: peter-evans/dockerhub-description@v5
+        uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
