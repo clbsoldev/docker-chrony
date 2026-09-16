@@ -1,0 +1,128 @@
+---
+name: Build and publish chrony-ntp-server image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "image/**"
+  schedule:
+    # Weekly rebuild attempt to pick up upstream Debian security patches,
+    # even when the Dockerfile itself hasn't changed.
+    - cron: "0 4 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build a deterministic OCI tarball. Not pushed anywhere yet —
+      # this is the single build; check and publish both reuse it.
+      - name: Build image to OCI tarball
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --output type=oci,dest=image.tar \
+            ./image
+
+      - name: Upload OCI tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-tar
+          path: image.tar
+          retention-days: 1
+
+  check:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.digest.outputs.changed }}
+      new_digest: ${{ steps.digest.outputs.new }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download OCI tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: image-tar
+
+      - name: Compute and compare content digest
+        id: digest
+        run: |
+          NEW_DIGEST=$(sha256sum image.tar | awk '{print $1}')
+          OLD_DIGEST=$(cat digest.txt 2>/dev/null || echo "none")
+          echo "new=$NEW_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Previous digest: $OLD_DIGEST"
+          echo "New digest:      $NEW_DIGEST"
+          if [ "$NEW_DIGEST" != "$OLD_DIGEST" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: [build, check]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to commit the updated digest.txt back to the repo
+      packages: write   # to push to GHCR
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download OCI tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: image-tar
+
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      # Push directly from the already-built tarball — no rebuild.
+      - name: Push to GHCR
+        run: |
+          skopeo copy \
+            --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            oci-archive:image.tar \
+            docker://ghcr.io/clbsoldev/chrony-ntp-server:latest
+
+      # Docker Hub is optional — enable later by setting the repo/org
+      # variable ENABLE_DOCKERHUB to "true" (Settings → Actions → Variables).
+      # No code changes needed to turn it on.
+      - name: Push to Docker Hub
+        if: vars.ENABLE_DOCKERHUB == 'true'
+        run: |
+          skopeo copy \
+            --dest-creds "${{ secrets.DOCKERHUB_USERNAME }}:${{ secrets.DOCKERHUB_TOKEN }}" \
+            oci-archive:image.tar \
+            docker://docker.io/${{ secrets.DOCKERHUB_USERNAME }}/chrony-ntp-server:latest
+
+      - name: Sync README to Docker Hub
+        if: vars.ENABLE_DOCKERHUB == 'true'
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/chrony-ntp-server
+          readme-filepath: ./README.md
+          short-description: "Rootless Chrony NTP server with full custom chrony.conf support (Cisco Secure NTP compatible)"
+
+      - name: Commit updated digest
+        run: |
+          echo "${{ needs.check.outputs.new_digest }}" > digest.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add digest.txt
+          git commit -m "chore: update image digest to ${{ needs.check.outputs.new_digest }}"
+          git push
