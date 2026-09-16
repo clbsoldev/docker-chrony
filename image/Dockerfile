@@ -12,7 +12,8 @@ RUN apt-get update \
     && groupadd -g 1000 chrony-app \
     && useradd -u 1000 -g chrony-app -M -s /usr/sbin/nologin chrony-app \
     && mkdir -p /var/lib/chrony /run/chrony \
-    && chown -R chrony-app:chrony-app /var/lib/chrony /run/chrony /etc/chrony
+    && chown -R chrony-app:chrony-app /var/lib/chrony /run/chrony /etc/chrony \
+    && chmod 750 /run/chrony /var/lib/chrony
 
 # image/chrony.conf — default fallback config — overridden by a bind mount in production.
 COPY chrony.conf /etc/chrony/chrony.conf
