@@ -8,9 +8,11 @@ on:
     paths:
       - "image/**"
   schedule:
-    # Weekly rebuild attempt to pick up upstream Debian security patches,
-    # even when the Dockerfile itself hasn't changed.
-    - cron: "0 4 * * 1"
+    # Sunday 22:00 CEST (UTC+2). GitHub Actions cron is UTC-only and has
+    # no DST awareness — once Germany switches to CET (UTC+1) in late
+    # October, this fires at 21:00 local time instead of 22:00, until
+    # manually adjusted back for the next DST transition.
+    - cron: "0 20 * * 0"
   workflow_dispatch: {}
 
 jobs:
