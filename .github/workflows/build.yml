@@ -43,6 +43,9 @@ jobs:
       new_digest: ${{ steps.digest.outputs.new }}
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download OCI tarball
         uses: actions/download-artifact@v4
         with:
@@ -52,9 +55,9 @@ jobs:
         id: digest
         run: |
           NEW_DIGEST=$(sha256sum image.tar | awk '{print $1}')
-          OLD_DIGEST="${{ vars.IMAGE_DIGEST }}"
+          OLD_DIGEST=$(cat digest.txt 2>/dev/null || echo "none")
           echo "new=$NEW_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Previous digest: ${OLD_DIGEST:-none}"
+          echo "Previous digest: $OLD_DIGEST"
           echo "New digest:      $NEW_DIGEST"
           if [ "$NEW_DIGEST" != "$OLD_DIGEST" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -67,10 +70,13 @@ jobs:
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
-      actions: write   # to update the IMAGE_DIGEST repo variable
-      packages: write  # to push to GHCR
+      contents: write   # to commit the updated digest.txt back to the repo
+      packages: write   # to push to GHCR
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download OCI tarball
         uses: actions/download-artifact@v4
         with:
@@ -106,10 +112,11 @@ jobs:
           readme-filepath: ./README.md
           short-description: "Rootless Chrony NTP server with full custom chrony.conf support (Cisco Secure NTP compatible)"
 
-      - name: Update IMAGE_DIGEST repo variable
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit updated digest
         run: |
-          gh variable set IMAGE_DIGEST \
-            --repo "${{ github.repository }}" \
-            --body "${{ needs.check.outputs.new_digest }}"
+          echo "${{ needs.check.outputs.new_digest }}" > digest.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add digest.txt
+          git commit -m "chore: update image digest to ${{ needs.check.outputs.new_digest }}"
+          git push
