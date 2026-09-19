@@ -8,10 +8,6 @@ on:
     paths:
       - "image/**"
   schedule:
-    # Sunday 22:00 CEST (UTC+2). GitHub Actions cron is UTC-only and has
-    # no DST awareness — once Germany switches to CET (UTC+1) in late
-    # October, this fires at 21:00 local time instead of 22:00, until
-    # manually adjusted back for the next DST transition.
     - cron: "0 20 * * 0"
   workflow_dispatch: {}
 
@@ -25,8 +21,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build a deterministic OCI tarball. Not pushed anywhere yet —
-      # this is the single build; check and publish both reuse it.
       - name: Build image to OCI tarball
         run: |
           docker buildx build \
@@ -49,9 +43,6 @@ jobs:
       new_digest: ${{ steps.digest.outputs.new }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Download OCI tarball
         uses: actions/download-artifact@v4
         with:
@@ -61,9 +52,9 @@ jobs:
         id: digest
         run: |
           NEW_DIGEST=$(sha256sum image.tar | awk '{print $1}')
-          OLD_DIGEST=$(cat digest.txt 2>/dev/null || echo "none")
+          OLD_DIGEST="${{ vars.IMAGE_DIGEST }}"
           echo "new=$NEW_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Previous digest: $OLD_DIGEST"
+          echo "Previous digest: ${OLD_DIGEST:-none}"
           echo "New digest:      $NEW_DIGEST"
           if [ "$NEW_DIGEST" != "$OLD_DIGEST" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -76,13 +67,10 @@ jobs:
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # to commit the updated digest.txt back to the repo
-      packages: write   # to push to GHCR
+      actions: write   # to update the IMAGE_DIGEST repo variable
+      packages: write  # to push to GHCR
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Download OCI tarball
         uses: actions/download-artifact@v4
         with:
@@ -91,10 +79,6 @@ jobs:
       - name: Install skopeo
         run: sudo apt-get update && sudo apt-get install -y skopeo
 
-      # Push directly from the already-built tarball — no rebuild.
-      # --multi-arch all is required: without it, skopeo defaults to
-      # copying only the architecture matching the runner (amd64),
-      # silently dropping the arm64 variant from the pushed manifest.
       - name: Push to GHCR
         run: |
           skopeo copy \
@@ -103,9 +87,6 @@ jobs:
             oci-archive:image.tar \
             docker://ghcr.io/clbsoldev/chrony-ntp-server:latest
 
-      # Docker Hub is optional — enable later by setting the repo/org
-      # variable ENABLE_DOCKERHUB to "true" (Settings → Actions → Variables).
-      # No code changes needed to turn it on.
       - name: Push to Docker Hub
         if: vars.ENABLE_DOCKERHUB == 'true'
         run: |
@@ -125,11 +106,10 @@ jobs:
           readme-filepath: ./README.md
           short-description: "Rootless Chrony NTP server with full custom chrony.conf support (Cisco Secure NTP compatible)"
 
-      - name: Commit updated digest
+      - name: Update IMAGE_DIGEST repo variable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "${{ needs.check.outputs.new_digest }}" > digest.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add digest.txt
-          git commit -m "chore: update image digest to ${{ needs.check.outputs.new_digest }}"
-          git push
+          gh variable set IMAGE_DIGEST \
+            --repo "${{ github.repository }}" \
+            --body "${{ needs.check.outputs.new_digest }}"
