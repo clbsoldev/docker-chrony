@@ -5,17 +5,26 @@ set -e
 CHRONYD_ARGS="-n -d -x -u chrony-app"
 
 if [ "${MONITORING:-0}" = "1" ] || [ "${MONITORING:-}" = "true" ]; then
-    # chronyd runs in the background. IMPORTANT: python3 must NOT be exec'd
-    # here — exec replaces this shell process entirely, discarding the trap
-    # below, so chronyd would never receive SIGTERM on container stop and
-    # would leave a stale chronyd.pid behind (blocking the next start).
-    # Keeping the shell as PID 1 (via `wait` instead of `exec`) ensures the
-    # trap fires and chronyd shuts down cleanly.
     chronyd $CHRONYD_ARGS &
     CHRONYD_PID=$!
-    trap 'kill "$CHRONYD_PID" 2>/dev/null; exit 0' TERM INT
+
     python3 /usr/local/bin/monitor.py &
     MONITOR_PID=$!
+
+    # Forward shutdown signals to both children and WAIT for them to
+    # actually finish exiting before this script (PID 1) exits. Sending
+    # the signal alone (kill) does not block — if we exit right after
+    # kill, Docker tears down the whole container the instant PID 1 is
+    # gone, potentially killing chronyd mid-shutdown before it removes
+    # its own pidfile (causing "Another chronyd may already be running"
+    # on the next start).
+    trap '
+        kill "$CHRONYD_PID" "$MONITOR_PID" 2>/dev/null
+        wait "$CHRONYD_PID" 2>/dev/null
+        wait "$MONITOR_PID" 2>/dev/null
+        exit 0
+    ' TERM INT
+
     wait "$MONITOR_PID"
 else
     # Default behaviour — unchanged from before MONITORING existed.
