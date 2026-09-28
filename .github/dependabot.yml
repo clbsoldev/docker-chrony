@@ -9,6 +9,8 @@ updates:
     open-pull-requests-limit: 5
     reviewers:
       - "clbsoldev/docker-admins"
+    assignees:
+      - "strfl89"
     commit-message:
       prefix: "chore(actions)"
     labels:
